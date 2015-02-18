@@ -1,0 +1,155 @@
+import static org.apache.commons.io.FilenameUtils.*
+
+buildscript {
+    repositories {
+        mavenCentral()
+    }
+
+    dependencies {
+        classpath 'commons-io:commons-io:2.4'
+    }
+}
+
+allprojects {
+    apply plugin: 'base'
+
+    configurations {
+        main
+    }
+
+    ext.ghc_sandbox_root = new File(buildDir, "/.sandbox")
+    ext.ghc_package_db = new File(ghc_sandbox_root, "/packages")
+    ext.ghc_prefix = new File(ghc_sandbox_root, "/files")
+
+    task sandboxinfo << { 
+        println 
+
+        println "Project $name GHC sandbox info"
+        println ""
+        println "Package db: $ghc_package_db"
+        println "Install location: $ghc_prefix"
+    }
+
+    task sandboxDirs { task ->
+        outputs.dir(task.project.ghc_package_db)
+        outputs.dir(task.project.ghc_prefix)
+
+        doFirst {
+            task.project.ghc_package_db.mkdirs()
+            task.project.ghc_prefix.mkdirs()
+        }
+    }
+
+    task sandboxInit(type: Exec) {
+
+        dependsOn sandboxDirs
+        outputs.file(new File(ghc_package_db, "package.cache"))
+
+        commandLine "ghc-pkg", "--package-db=$ghc_package_db", "recache"
+
+        doLast {
+            println "Recached $ghc_package_db"
+        }
+    }
+
+    task sandbox {
+        dependsOn sandboxInit
+    }
+
+    task sandboxPackages(type: Exec) {
+        dependsOn sandbox
+
+        commandLine "ghc-pkg", "list", "--package-db=$ghc_package_db"
+    }
+
+    task extractDependentSandbox {
+        dependsOn sandbox
+        dependsOn configurations.main
+
+        doLast {
+            for (artifact in configurations.main.resolvedConfiguration.resolvedArtifacts) {
+                def file = artifact.file
+                def targetDir = new File(new File(buildDir, "deps"), getBaseName(file.name))                
+                targetDir.mkdirs()
+
+                copy {
+                    from zipTree(file)
+                    into "$targetDir"
+                }
+            }
+        }
+    }
+
+    task build { 
+        dependsOn sandbox
+        dependsOn extractDependentSandbox
+
+        // TODO: inputs
+
+        doLast {
+            def args = ["cabal",
+                        "install"
+                       ]
+
+            for (artifact in configurations.main.resolvedConfiguration.resolvedArtifacts) {
+                def file = artifact.file
+                def packageDb = new File(new File(new File(buildDir, "deps"), getBaseName(file.name)), "packages")
+                args += "--package-db=$packageDb"
+            }
+
+            args += ["--package-db=$ghc_package_db", 
+                     "--prefix=$ghc_prefix", 
+                     "--builddir=$buildDir/dist"
+                    ]
+
+            exec {
+                commandLine args
+                workingDir projectDir
+            }
+        }
+    }
+
+    task zippedSandbox(type: Zip) {
+        dependsOn build
+
+        from ghc_sandbox_root
+    }
+
+    artifacts {
+        main (zippedSandbox)
+    }
+}
+
+allprojects {
+    repositories {
+        flatDir {
+            name "fileRepo"
+            dirs "../repo"
+        }
+    }
+    
+    uploadArchives {
+        repositories {
+            add project.repositories.fileRepo
+        }
+    }
+}
+
+project(":lib1") {
+    version '0.1'
+}
+
+project(":lib2") {
+    version '0.1'
+}
+
+project(":app") {
+
+    dependencies {
+        main project(path: ":lib1", configuration: "main")
+        main project(path: ":lib2", configuration: "main")
+    }
+
+    version '0.1'
+}
+
