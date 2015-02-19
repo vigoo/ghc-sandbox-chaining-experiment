@@ -9,4 +9,5 @@ library
   exposed-modules:     Lib2
   build-depends:       base >=4.7 && <4.8
                      , ansi-wl-pprint ==0.6.*
+                     , lib1 ==0.1.*
   default-language:    Haskell2010

@@ -1,5 +1,3 @@
-import static org.apache.commons.io.FilenameUtils.*
-
 buildscript {
     repositories {
         mavenCentral()
@@ -10,14 +8,59 @@ buildscript {
     }
 }
 
+import static org.apache.commons.io.FilenameUtils.*
+
+def fixDependency(buildDir, dep) {
+    def childSandboxes = []
+    for (childDep in dep.children) {
+        childSandboxes.addAll(fixDependency(buildDir, childDep))
+    }
+
+    def resultSandboxes = []
+    for (artifact in dep.moduleArtifacts) {
+        println "Fixing sandbox $artifact.file.name with child sandboxes $childSandboxes"
+
+        def file = artifact.file
+        def targetDir = new File(new File(buildDir, "deps"), getBaseName(file.name))
+
+        def sandfixPath = "$buildDir/sandfix/sandfix-1.1"
+
+        exec {
+            def cmd = ["runhaskell",
+                       "$sandfixPath/src/SandFix.hs",
+                       "$targetDir",
+                       "packages",
+                       "--package-db=global"
+                      ]
+            for (child in childSandboxes) {                
+                cmd += "--package-db=$child/packages"
+            }
+            commandLine cmd
+        }
+
+        exec {            
+            commandLine "ghc-pkg", "-f", "$targetDir/packages", "recache"
+        }
+
+        resultSandboxes << targetDir
+    }
+
+    return resultSandboxes
+}
+
 allprojects {
     apply plugin: 'base'
 
     configurations {
         main
+        sandfix
     }
 
-    ext.ghc_sandbox_root = new File(buildDir, "/.sandbox")
+    dependencies {
+        sandfix group: "com.prezi.engine.dom", name: "pdom-sandfix", configuration: "haskellSrc", version: "1.+"
+}
+
+    ext.ghc_sandbox_root = new File(buildDir, "/sandbox")
     ext.ghc_package_db = new File(ghc_sandbox_root, "/packages")
     ext.ghc_prefix = new File(ghc_sandbox_root, "/files")
 
@@ -37,6 +80,16 @@ allprojects {
         doFirst {
             task.project.ghc_package_db.mkdirs()
             task.project.ghc_prefix.mkdirs()
+        }
+    }
+
+    def sandfixDir = new File(buildDir, "/sandfix")
+
+    task copySandFix(type: Copy) {
+        inputs.files configurations.sandfix
+        into sandfixDir
+        from {
+            configurations.sandfix.collect { tarTree(it) }
         }
     }
 
@@ -64,11 +117,15 @@ allprojects {
 
     task extractDependentSandbox {
         dependsOn sandbox
+        dependsOn copySandFix
         dependsOn configurations.main
 
         doLast {
             for (artifact in configurations.main.resolvedConfiguration.resolvedArtifacts) {
                 def file = artifact.file
+
+                println "Extracting sandbox dependency $file.name"
+
                 def targetDir = new File(new File(buildDir, "deps"), getBaseName(file.name))                
                 targetDir.mkdirs()
 
@@ -80,15 +137,27 @@ allprojects {
         }
     }
 
+    task fixDependentSandboxes {
+        dependsOn extractDependentSandbox
+
+        doLast {                        
+            for (dep in configurations.main.resolvedConfiguration.firstLevelModuleDependencies) {
+                fixDependency(buildDir, dep)
+            }
+        }
+    }
+
     task build { 
         dependsOn sandbox
-        dependsOn extractDependentSandbox
+        dependsOn fixDependentSandboxes
 
         // TODO: inputs
 
         doLast {
             def args = ["cabal",
-                        "install"
+                        "install",
+                        "--package-db=clear",
+                        "--package-db=global"
                        ]
 
             for (artifact in configurations.main.resolvedConfiguration.resolvedArtifacts) {
@@ -126,6 +195,16 @@ allprojects {
             name "fileRepo"
             dirs "../repo"
         }
+
+        mavenCentral()
+        ivy {
+            url "https://artifactory.prezi.com/prezi-client-release-local"
+            layout 'maven'
+            credentials {
+                username nexusUser
+                password nexusPassword
+            }
+        }
     }
     
     uploadArchives {
@@ -140,13 +219,16 @@ project(":lib1") {
 }
 
 project(":lib2") {
-    version '0.1'
+    version '0.3'
+
+    dependencies {
+        main project(path: ":lib1", configuration: "main")
+    }
 }
 
 project(":app") {
 
     dependencies {
-        main project(path: ":lib1", configuration: "main")
         main project(path: ":lib2", configuration: "main")
     }
 
