@@ -1,151 +1,31 @@
 buildscript {
     repositories {
+        mavenLocal()
         mavenCentral()
     }
 
     dependencies {
         classpath 'commons-io:commons-io:2.4'
+        classpath 'com.prezi.haskell:gradle-haskell-plugin:0.1'
     }
 }
 
 import static org.apache.commons.io.FilenameUtils.*
 
-def fixDependency(buildDir, dep) {
-    def childSandboxes = []
-    for (childDep in dep.children) {
-        childSandboxes.addAll(fixDependency(buildDir, childDep))
-    }
-
-    def resultSandboxes = []
-    for (artifact in dep.moduleArtifacts) {
-        println "Fixing sandbox $artifact.file.name with child sandboxes $childSandboxes"
-
-        def file = artifact.file
-        def targetDir = new File(new File(buildDir, "deps"), getBaseName(file.name))
-
-        def sandfixPath = "$buildDir/sandfix/sandfix-1.1"
-
-        exec {
-            def cmd = ["runhaskell",
-                       "$sandfixPath/src/SandFix.hs",
-                       "$targetDir",
-                       "packages",
-                       "--package-db=global"
-                      ]
-            for (child in childSandboxes) {                
-                cmd += "--package-db=$child/packages"
-            }
-            commandLine cmd
-        }
-
-        exec {            
-            commandLine "ghc-pkg", "-f", "$targetDir/packages", "recache"
-        }
-
-        resultSandboxes << targetDir
-    }
-
-    return resultSandboxes
-}
-
 allprojects {
-    apply plugin: 'base'
-
-    configurations {
-        main
-        sandfix
-    }
-
-    dependencies {
-        sandfix group: "com.prezi.engine.dom", name: "pdom-sandfix", configuration: "haskellSrc", version: "1.+"
-}
-
-    ext.ghc_sandbox_root = new File(buildDir, "/sandbox")
-    ext.ghc_package_db = new File(ghc_sandbox_root, "/packages")
-    ext.ghc_prefix = new File(ghc_sandbox_root, "/files")
-
-    task sandboxinfo << { 
-        println 
-
-        println "Project $name GHC sandbox info"
-        println ""
-        println "Package db: $ghc_package_db"
-        println "Install location: $ghc_prefix"
-    }
-
-    task sandboxDirs { task ->
-        outputs.dir(task.project.ghc_package_db)
-        outputs.dir(task.project.ghc_prefix)
-
-        doFirst {
-            task.project.ghc_package_db.mkdirs()
-            task.project.ghc_prefix.mkdirs()
-        }
-    }
-
-    def sandfixDir = new File(buildDir, "/sandfix")
-
-    task copySandFix(type: Copy) {
-        inputs.files configurations.sandfix
-        into sandfixDir
-        from {
-            configurations.sandfix.collect { tarTree(it) }
-        }
-    }
-
-    task sandboxInit(type: Exec) {
-
-        dependsOn sandboxDirs
-        outputs.file(new File(ghc_package_db, "package.cache"))
-
-        commandLine "ghc-pkg", "--package-db=$ghc_package_db", "recache"
-
-        doLast {
-            println "Recached $ghc_package_db"
-        }
-    }
-
-    task sandbox {
-        dependsOn sandboxInit
-    }
-
-    task sandboxPackages(type: Exec) {
-        dependsOn sandbox
-
-        commandLine "ghc-pkg", "list", "--package-db=$ghc_package_db"
-    }
-
-    task extractDependentSandbox {
-        dependsOn sandbox
-        dependsOn copySandFix
-        dependsOn configurations.main
-
-        doLast {
-            for (artifact in configurations.main.resolvedConfiguration.resolvedArtifacts) {
-                def file = artifact.file
-
-                println "Extracting sandbox dependency $file.name"
-
-                def targetDir = new File(new File(buildDir, "deps"), getBaseName(file.name))                
-                targetDir.mkdirs()
-
-                copy {
-                    from zipTree(file)
-                    into "$targetDir"
-                }
+    // For sandfix (used by the haskell plugin)
+    repositories {
+        ivy {
+            url "https://artifactory.prezi.com/prezi-client-release-local"
+            layout 'maven'
+            credentials {
+                username nexusUser
+                password nexusPassword
             }
         }
     }
 
-    task fixDependentSandboxes {
-        dependsOn extractDependentSandbox
-
-        doLast {                        
-            for (dep in configurations.main.resolvedConfiguration.firstLevelModuleDependencies) {
-                fixDependency(buildDir, dep)
-            }
-        }
-    }
+    apply plugin: 'haskell'
 
     task build { 
         dependsOn sandbox
@@ -166,8 +46,8 @@ allprojects {
                 args += "--package-db=$packageDb"
             }
 
-            args += ["--package-db=$ghc_package_db", 
-                     "--prefix=$ghc_prefix", 
+            args += ["--package-db=$ghcPackageDb", 
+                     "--prefix=$ghcPrefix", 
                      "--builddir=$buildDir/dist"
                     ]
 
@@ -181,7 +61,7 @@ allprojects {
     task zippedSandbox(type: Zip) {
         dependsOn build
 
-        from ghc_sandbox_root
+        from ghcSandboxRoot
     }
 
     artifacts {
@@ -197,14 +77,6 @@ allprojects {
         }
 
         mavenCentral()
-        ivy {
-            url "https://artifactory.prezi.com/prezi-client-release-local"
-            layout 'maven'
-            credentials {
-                username nexusUser
-                password nexusPassword
-            }
-        }
     }
     
     uploadArchives {
