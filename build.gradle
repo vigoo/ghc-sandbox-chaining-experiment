@@ -27,36 +27,15 @@ allprojects {
 
     apply plugin: 'haskell'
 
-    task build { 
-        dependsOn sandbox
-        dependsOn fixDependentSandboxes
-
-        // TODO: inputs
-
-        doLast {
-            def args = ["cabal",
-                        "install",
-                        "--package-db=clear",
-                        "--package-db=global"
-                       ]
-
-            for (artifact in configurations.main.resolvedConfiguration.resolvedArtifacts) {
-                def file = artifact.file
-                def packageDb = new File(new File(new File(buildDir, "deps"), getBaseName(file.name)), "packages")
-                args += "--package-db=$packageDb"
-            }
-
-            args += ["--package-db=$ghcPackageDb", 
-                     "--prefix=$ghcPrefix", 
-                     "--builddir=$buildDir/dist"
-                    ]
-
-            exec {
-                commandLine args
-                workingDir projectDir
-            }
-        }
-    }
+    // haskell {
+    //     sources {
+    //         main {
+    //             haskell {
+    //                 source.srcDir "TODO"
+    //             }
+    //         }
+    //     }
+    // }
 
     task zippedSandbox(type: Zip) {
         dependsOn build
@@ -105,5 +84,9 @@ project(":app") {
     }
 
     version '0.1'
+}
+
+task wrapper(type: Wrapper) {
+	gradleVersion = '2.2.1'
 }
 

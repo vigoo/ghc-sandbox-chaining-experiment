@@ -6,6 +6,7 @@ build-type:          Simple
 cabal-version:       >=1.10
 
 library
+  hs-source-dirs:      src/main/haskell
   exposed-modules:     Lib2
   build-depends:       base >=4.7 && <4.8
                      , ansi-wl-pprint ==0.6.*
